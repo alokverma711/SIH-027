@@ -1,54 +1,19 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Modal, Button, Form, Alert, Badge, InputGroup, Nav } from 'react-bootstrap';
-import { Zap, Clock, Wrench, Search, MapPin, Calendar, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, ShieldAlert, Clock, Search, MapPin } from 'lucide-react';
 import type { RailwayNetwork, TrackEdge, StationSearchResult } from '../types';
 import { API_BASE_URL } from '../config';
 
-interface MaintenanceModalProps {
+interface EmergencyModalProps {
   show: boolean;
   onHide: () => void;
   network: RailwayNetwork | null;
   selectedTrackId?: string | null;
-  onSubmit: (
-    assetId: string,
-    durationMins: number,
-    failureType: string,
-    priority: string,
-    scheduledDate?: string,
-    scheduledDay?: string,
-    advanceNoticeDays?: number
-  ) => Promise<void>;
+  onSubmit: (assetId: string, durationMins: number, failureType: string, priority: string) => Promise<void>;
   loading: boolean;
 }
 
-// Helpers for formatted date calculation
-const getOffsetDateString = (offsetDays: number = 1): string => {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  return d.toISOString().split('T')[0];
-};
-
-const getDayNameFromDate = (dateStr: string): string => {
-  try {
-    const [y, m, d] = dateStr.split('-').map(Number);
-    const dateObj = new Date(y, m - 1, d);
-    return dateObj.toLocaleDateString('en-IN', { weekday: 'long' });
-  } catch {
-    return 'Friday';
-  }
-};
-
-const getHumanReadableDate = (dateStr: string): string => {
-  try {
-    const [y, m, d] = dateStr.split('-').map(Number);
-    const dateObj = new Date(y, m - 1, d);
-    return dateObj.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-  } catch {
-    return dateStr;
-  }
-};
-
-export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({
+export const EmergencyModal: React.FC<EmergencyModalProps> = ({
   show,
   onHide,
   network,
@@ -64,38 +29,9 @@ export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({
   const [toSearchResults, setToSearchResults] = useState<StationSearchResult[]>([]);
 
   const [durationMins, setDurationMins] = useState<number>(180);
-  const [failureType, setFailureType] = useState<string>('Track Renewal');
-  const [priority, setPriority] = useState<string>('High');
+  const [failureType, setFailureType] = useState<string>('Track Failure');
+  const [priority, setPriority] = useState<string>('Critical');
   const [trackSearch, setTrackSearch] = useState<string>('');
-
-  // 1-2 Days Advance Scheduling State
-  const [advancePreset, setAdvancePreset] = useState<number>(1); // Default: Tomorrow (+1 day)
-  const [scheduledDate, setScheduledDate] = useState<string>(() => getOffsetDateString(1));
-
-  // Sync scheduled date when preset changes
-  const handlePresetSelect = (days: number) => {
-    setAdvancePreset(days);
-    setScheduledDate(getOffsetDateString(days));
-  };
-
-  const handleCustomDateChange = (dateVal: string) => {
-    setScheduledDate(dateVal);
-    // Calculate difference in days from today
-    try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const [y, m, d] = dateVal.split('-').map(Number);
-      const chosen = new Date(y, m - 1, d);
-      const diffTime = chosen.getTime() - today.getTime();
-      const diffDays = Math.max(0, Math.round(diffTime / (1000 * 60 * 60 * 24)));
-      setAdvancePreset(diffDays);
-    } catch {
-      setAdvancePreset(1);
-    }
-  };
-
-  const scheduledDayName = useMemo(() => getDayNameFromDate(scheduledDate), [scheduledDate]);
-  const formattedScheduledDate = useMemo(() => getHumanReadableDate(scheduledDate), [scheduledDate]);
 
   // Keep state in sync if prop changes
   useEffect(() => {
@@ -137,15 +73,7 @@ export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({
       : assetId;
 
     if (!finalAssetId) return;
-    await onSubmit(
-      finalAssetId,
-      durationMins,
-      failureType,
-      priority,
-      scheduledDate,
-      scheduledDayName,
-      advancePreset
-    );
+    await onSubmit(finalAssetId, durationMins, failureType, priority);
     onHide();
   };
 
@@ -170,27 +98,24 @@ export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({
     }).slice(0, 100);
   }, [network, trackSearch]);
 
-  const todayMinDate = useMemo(() => getOffsetDateString(0), []);
-
   return (
     <Modal show={show} onHide={onHide} centered backdrop="static" size="lg">
-      <Modal.Header closeButton className="bg-primary text-white border-0" style={{ backgroundColor: 'var(--gov-blue)' }}>
+      <Modal.Header closeButton className="bg-danger text-white border-0">
         <Modal.Title className="d-flex align-items-center gap-2 fs-5">
-          <Wrench size={22} />
-          Schedule Planned Track Maintenance
+          <ShieldAlert size={22} />
+          Inject Emergency Track Failure / Block
         </Modal.Title>
       </Modal.Header>
       <Form onSubmit={handleSubmit}>
-        <Modal.Body className="p-4 custom-scrollbar" style={{ maxHeight: '75vh', overflowY: 'auto' }}>
-          
-          <Alert variant="info" className="d-flex align-items-start gap-2 mb-3 py-2 small">
-            <Zap size={18} className="flex-shrink-0 mt-1 text-info" />
+        <Modal.Body className="p-4">
+          <Alert variant="warning" className="d-flex align-items-start gap-2 mb-3 py-2 small">
+            <AlertTriangle size={18} className="flex-shrink-0 mt-1 text-warning" />
             <div>
-              <strong>AI Corridor Schedule Optimizer:</strong> Scheduling maintenance evaluates optimal Night Shadow & Daylight windows, computes train conflict reroutes, and issues advance caution orders.
+              <strong>Live Track Disruption Simulation:</strong> Injecting an unscheduled emergency will immediately highlight the corridor and its intermediate stations on the map, and trigger the AI Dispatch Engine in real-time.
             </div>
           </Alert>
 
-          {/* Target Track Selection Mode Tabs */}
+          {/* Mode Tabs */}
           <Nav variant="pills" className="nav-fill mb-3 bg-light p-1 rounded">
             <Nav.Item>
               <Nav.Link
@@ -216,13 +141,13 @@ export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({
 
           {selectionMode === 'preset' ? (
             <Form.Group className="mb-3">
-              <Form.Label className="fw-semibold small text-secondary">Target Railway Corridor Track</Form.Label>
+              <Form.Label className="fw-semibold small text-secondary">Target Railway Track Segment</Form.Label>
               <InputGroup size="sm" className="mb-2">
                 <InputGroup.Text className="bg-white">
                   <Search size={13} className="text-muted" />
                 </InputGroup.Text>
                 <Form.Control
-                  placeholder="Filter corridors (e.g. NDLS, Mumbai, Howrah, Akola)..."
+                  placeholder="Filter corridors (e.g. NDLS, CNB, HWH, Akola)..."
                   value={trackSearch}
                   onChange={(e) => setTrackSearch(e.target.value)}
                   style={{ fontSize: '0.8rem' }}
@@ -266,10 +191,7 @@ export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({
                           text="dark"
                           className="border extra-small"
                           style={{ cursor: 'pointer' }}
-                          onClick={() => {
-                            setFromJunction(s.code);
-                            setFromSearchResults([]);
-                          }}
+                          onClick={() => setFromJunction(s.code)}
                         >
                           {s.code} ({s.name})
                         </Badge>
@@ -302,10 +224,7 @@ export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({
                           text="dark"
                           className="border extra-small"
                           style={{ cursor: 'pointer' }}
-                          onClick={() => {
-                            setToJunction(s.code);
-                            setToSearchResults([]);
-                          }}
+                          onClick={() => setToJunction(s.code)}
                         >
                           {s.code} ({s.name})
                         </Badge>
@@ -317,136 +236,43 @@ export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({
             </div>
           )}
 
-          {/* Section: 1-2 Days Advance Scheduling & Date / Day Selector */}
-          <div className="p-3 mb-3 rounded-3 border bg-light bg-opacity-75">
-            <div className="d-flex align-items-center justify-content-between mb-2 flex-wrap gap-2">
-              <div className="d-flex align-items-center gap-1.5 fw-bold text-dark small">
-                <Calendar size={16} className="text-primary" />
-                <span>Scheduled Execution Date & Day (Advance Notice)</span>
-              </div>
-              <Badge bg="primary" className="extra-small px-2 py-1">
-                {advancePreset === 0 ? 'Immediate (0d Notice)' : `${advancePreset} Day${advancePreset > 1 ? 's' : ''} Advance Notice`}
-              </Badge>
-            </div>
-
-            {/* Quick Presets: Today / Tomorrow (+1d) / Day After (+2d) / +3d */}
-            <div className="d-flex flex-wrap gap-1.5 mb-2.5">
-              <Button
-                type="button"
-                variant={advancePreset === 0 ? "primary" : "outline-secondary"}
-                size="sm"
-                className="extra-small py-1 px-2.5"
-                onClick={() => handlePresetSelect(0)}
-              >
-                Today (Immediate)
-              </Button>
-              <Button
-                type="button"
-                variant={advancePreset === 1 ? "primary" : "outline-secondary"}
-                size="sm"
-                className="extra-small py-1 px-2.5 fw-bold"
-                onClick={() => handlePresetSelect(1)}
-              >
-                ⭐ Tomorrow (+1 Day Notice)
-              </Button>
-              <Button
-                type="button"
-                variant={advancePreset === 2 ? "primary" : "outline-secondary"}
-                size="sm"
-                className="extra-small py-1 px-2.5"
-                onClick={() => handlePresetSelect(2)}
-              >
-                Day After Tomorrow (+2 Days Notice)
-              </Button>
-              <Button
-                type="button"
-                variant={advancePreset === 3 ? "primary" : "outline-secondary"}
-                size="sm"
-                className="extra-small py-1 px-2.5"
-                onClick={() => handlePresetSelect(3)}
-              >
-                +3 Days Notice
-              </Button>
-            </div>
-
-            {/* Date Picker Input and Live Computed Day Indicator */}
-            <div className="row g-2 align-items-center">
-              <div className="col-12 col-md-6">
-                <InputGroup size="sm">
-                  <InputGroup.Text className="bg-white">
-                    <Calendar size={13} className="text-muted" />
-                  </InputGroup.Text>
-                  <Form.Control
-                    type="date"
-                    min={todayMinDate}
-                    value={scheduledDate}
-                    onChange={(e) => handleCustomDateChange(e.target.value)}
-                    required
-                    className="extra-small fw-semibold"
-                  />
-                </InputGroup>
-              </div>
-              
-              <div className="col-12 col-md-6">
-                <div className="p-1.5 px-2 bg-white rounded border d-flex align-items-center justify-content-between extra-small">
-                  <span className="text-muted">Target Day:</span>
-                  <span className="fw-bold text-dark d-flex align-items-center gap-1">
-                    <CheckCircle2 size={13} className="text-success" />
-                    <span>{scheduledDayName}, {formattedScheduledDate}</span>
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Indian Railways Advance Planning Advisory Note */}
-            <div className="extra-small text-muted mt-2 pt-1 border-top" style={{ fontSize: '0.73rem' }}>
-              <span className="text-success fw-bold">✓ IR Traffic Circular Protocol:</span> Scheduling 1-2 days in advance pre-queues Caution Orders (T/409) and allows cross-zonal freight trains to be rerouted ahead of time.
-            </div>
-          </div>
-
-          {/* Maintenance Type & Priority */}
           <div className="row g-3 mb-3">
             <div className="col-md-6">
               <Form.Group>
-                <Form.Label className="fw-semibold small text-secondary">Maintenance Type</Form.Label>
+                <Form.Label className="fw-semibold small text-secondary">Disruption Event Type</Form.Label>
                 <Form.Select
                   value={failureType}
                   onChange={(e) => setFailureType(e.target.value)}
-                  size="sm"
                 >
-                  <option value="Track Renewal">Track Renewal</option>
-                  <option value="Overhead Wire Maintenance">OHE Maintenance</option>
-                  <option value="Signal Upgrades">Signal System Upgrades</option>
-                  <option value="Bridge Maintenance">Bridge Maintenance</option>
-                  <option value="Ballast Cleaning">Ballast Cleaning</option>
+                  <option value="Track Failure">Track Fracture / Failure</option>
+                  <option value="Signal Interlocking Collapse">Signal Interlocking Failure</option>
+                  <option value="Overhead Wire Snag">OHE Power Snag</option>
+                  <option value="Landslide / Waterlogging">Landslide / Flood Disruption</option>
+                  <option value="Derailment Investigation">Emergency Investigation</option>
                 </Form.Select>
               </Form.Group>
             </div>
 
             <div className="col-md-6">
               <Form.Group>
-                <Form.Label className="fw-semibold small text-secondary">Priority Level</Form.Label>
+                <Form.Label className="fw-semibold small text-secondary">Emergency Severity</Form.Label>
                 <Form.Select
                   value={priority}
                   onChange={(e) => setPriority(e.target.value)}
-                  size="sm"
                 >
-                  <option value="Critical">Critical Priority</option>
-                  <option value="High">High Priority</option>
-                  <option value="Medium">Medium Priority</option>
-                  <option value="Low">Low Priority</option>
+                  <option value="Critical">Critical (Immediate Halt)</option>
+                  <option value="High">High (Speed Restriction)</option>
                 </Form.Select>
               </Form.Group>
             </div>
           </div>
 
-          {/* Block Duration Slider */}
-          <Form.Group className="mb-3">
+          <Form.Group className="mb-4">
             <div className="d-flex justify-content-between align-items-center mb-1">
               <Form.Label className="fw-semibold small text-secondary mb-0">
-                Block Duration: <span className="text-primary fw-bold">{durationMins / 60} hrs ({durationMins} mins)</span>
+                Estimated Restoration Time: <span className="text-danger fw-bold">{(durationMins / 60).toFixed(1)} hrs ({durationMins} mins)</span>
               </Form.Label>
-              <Badge bg="secondary" className="d-flex align-items-center gap-1">
+              <Badge bg="danger" className="d-flex align-items-center gap-1">
                 <Clock size={12} /> {durationMins}m
               </Badge>
             </div>
@@ -466,47 +292,47 @@ export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({
             </div>
           </Form.Group>
 
-          {/* Quick Preset Scenarios */}
+          {/* Quick Preset Buttons */}
           <div className="bg-light p-2 rounded border">
-            <div className="extra-small fw-bold text-uppercase text-muted mb-1.5" style={{ fontSize: '0.72rem' }}>
-              Quick Scenarios:
+            <div className="extra-small fw-bold text-uppercase text-muted mb-2" style={{ fontSize: '0.75rem' }}>
+              Emergency Presets:
             </div>
-            <div className="d-flex flex-wrap gap-1.5">
+            <div className="d-flex flex-wrap gap-2">
               <Button
-                variant="outline-secondary"
+                variant="outline-danger"
                 size="sm"
                 className="extra-small py-1"
                 onClick={() => {
-                  setDurationMins(120);
-                  setFailureType('Signal Upgrades');
-                  setPriority('Medium');
+                  setDurationMins(90);
+                  setFailureType('Signal Interlocking Collapse');
+                  setPriority('High');
                 }}
               >
-                2h Routine Signal
+                90m Signal Trip
               </Button>
               <Button
-                variant="outline-secondary"
+                variant="outline-danger"
                 size="sm"
                 className="extra-small py-1"
                 onClick={() => {
                   setDurationMins(240);
-                  setFailureType('Track Renewal');
+                  setFailureType('Track Failure');
                   setPriority('Critical');
                 }}
               >
-                4h Major Track Renewal
+                4h Rail Fracture
               </Button>
               <Button
-                variant="outline-secondary"
+                variant="outline-danger"
                 size="sm"
                 className="extra-small py-1"
                 onClick={() => {
                   setDurationMins(360);
-                  setFailureType('Bridge Maintenance');
-                  setPriority('High');
+                  setFailureType('Overhead Wire Snag');
+                  setPriority('Critical');
                 }}
               >
-                6h Bridge Overhaul
+                6h OHE Power Snag
               </Button>
             </div>
           </div>
@@ -515,8 +341,8 @@ export const MaintenanceModal: React.FC<MaintenanceModalProps> = ({
           <Button variant="light" onClick={onHide} disabled={loading}>
             Cancel
           </Button>
-          <Button variant="primary" type="submit" disabled={loading} style={{ backgroundColor: 'var(--gov-blue)', borderColor: 'var(--gov-blue)' }}>
-            {loading ? 'Optimizing Schedule & Loading Corridor...' : `Schedule Block for ${scheduledDayName} & View Corridor`}
+          <Button variant="danger" type="submit" disabled={loading}>
+            {loading ? 'Simulating AI Dispatch...' : 'Inject Failure & Render Corridor on Map'}
           </Button>
         </Modal.Footer>
       </Form>

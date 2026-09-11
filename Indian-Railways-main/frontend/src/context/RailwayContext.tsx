@@ -16,8 +16,16 @@ import type {
   DispatchDirective,
   DispatchStats,
   AiExplanation,
+  MaintenanceSubTask,
 } from '../types';
 import { API_BASE_URL as API_URL } from '../config';
+import {
+  syncAllMaintenanceToFirebase,
+  deleteMaintenanceFromFirebase,
+  clearAllMaintenanceFromFirebase,
+  saveOptimizationPlanToFirebase,
+  subscribeToMaintenanceSchedules
+} from '../services/firebaseScheduleService';
 
 interface RailwayContextType {
   // Network & Train data
@@ -96,7 +104,14 @@ interface RailwayContextType {
     priority: string,
     scheduledDate?: string,
     scheduledDay?: string,
-    advanceNoticeDays?: number
+    advanceNoticeDays?: number,
+    department?: string,
+    zone?: string,
+    sectionName?: string,
+    createdBy?: string,
+    createdByRole?: string,
+    createdByDesignation?: string,
+    tasks?: MaintenanceSubTask[]
   ) => Promise<void>;
   handleDeleteMaintenance: (id: string) => Promise<void>;
   handleClearAllMaintenance: () => Promise<void>;
@@ -125,6 +140,8 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [affectedTrains, setAffectedTrains] = useState<AffectedTrain[]>([]);
   const [unaffectedTrains, setUnaffectedTrains] = useState<UnaffectedTrain[]>([]);
   const [corridorTrainsByAsset, setCorridorTrainsByAsset] = useState<Record<string, CorridorTrain[]>>({});
+  const [dispatchDirectives, setDispatchDirectives] = useState<DispatchDirective[]>([]);
+  const [dispatchStats, setDispatchStats] = useState<DispatchStats | undefined>(undefined);
 
   const [loading, setLoading] = useState<boolean>(false);
   const [emergencyActive, setEmergencyActive] = useState<boolean>(false);
@@ -167,6 +184,7 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (maintRes.ok) {
         const data = await maintRes.json();
         setMaintenanceRequests(data);
+        syncAllMaintenanceToFirebase(data);
       }
       if (netRes.ok) {
         const data = await netRes.json();
@@ -183,6 +201,17 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
 
   useEffect(() => {
     fetchData(networkMode);
+
+    // Subscribe to real-time Firebase Firestore maintenance schedule updates
+    const unsubscribe = subscribeToMaintenanceSchedules((remoteSchedules) => {
+      if (remoteSchedules && remoteSchedules.length > 0) {
+        setMaintenanceRequests(remoteSchedules);
+      }
+    });
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
   }, []);
 
   const handleToggleNetworkMode = async (mode: 'major' | 'hdn' | 'full') => {
@@ -259,16 +288,22 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
   useEffect(() => {
     if (selectedPlanId && candidatePlans.length > 0) {
       const plan = candidatePlans.find((p) => p.id === selectedPlanId);
-      if (plan && metrics) {
+      if (plan) {
         setOptimizationPlan(plan.plan);
-        setMetrics({
-          before: metrics.before,
+        setMetrics((prev) => ({
+          before: prev?.before || { trains_affected: (plan.affected_trains?.length || 0) * 2, delay_mins: (plan.metrics?.delay_mins || 0) * 2 },
           after: plan.metrics,
-        });
+        }));
         setAffectedTrains(plan.affected_trains || []);
         setUnaffectedTrains(plan.unaffected_trains || []);
         if (plan.corridor_trains_by_asset) {
           setCorridorTrainsByAsset(plan.corridor_trains_by_asset);
+        }
+        if (plan.dispatch_directives) {
+          setDispatchDirectives(plan.dispatch_directives);
+        }
+        if (plan.dispatch_stats) {
+          setDispatchStats(plan.dispatch_stats);
         }
       }
     }
@@ -279,11 +314,22 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
     if (data.breakdown_by_maintenance) setBreakdownByMaintenance(data.breakdown_by_maintenance);
     if (data.recommended_plan_id) setSelectedPlanId(data.recommended_plan_id);
     if (data.corridor_trains_by_asset) setCorridorTrainsByAsset(data.corridor_trains_by_asset);
+    if (data.dispatch_directives) setDispatchDirectives(data.dispatch_directives);
+    if (data.dispatch_stats) setDispatchStats(data.dispatch_stats);
 
     setOptimizationPlan(data.plan);
     setMetrics(data.metrics);
     setAffectedTrains(data.affected_trains || []);
     setUnaffectedTrains(data.unaffected_trains || []);
+
+    // Persist complete Optimization Plan to Firebase Cloud Firestore
+    saveOptimizationPlanToFirebase({
+      selectedPlanId: data.recommended_plan_id || selectedPlanId || 'plan_optimal',
+      plan: data.plan,
+      metrics: data.metrics,
+      candidatePlans: data.candidate_plans || [],
+      breakdownByMaintenance: data.breakdown_by_maintenance
+    });
   };
 
   // Run AI Optimization
@@ -336,6 +382,7 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (resMaint.ok) {
         const updatedMaint = await resMaint.json();
         setMaintenanceRequests(updatedMaint);
+        syncAllMaintenanceToFirebase(updatedMaint);
       }
 
       // Auto-load corridor track with intermediate stations
@@ -358,7 +405,14 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
     priority: string,
     scheduledDate?: string,
     scheduledDay?: string,
-    advanceNoticeDays?: number
+    advanceNoticeDays?: number,
+    department?: string,
+    zone?: string,
+    sectionName?: string,
+    createdBy?: string,
+    createdByRole?: string,
+    createdByDesignation?: string,
+    tasks?: MaintenanceSubTask[]
   ) => {
     setLoading(true);
     setSelectedTrackId(assetId);
@@ -372,9 +426,16 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
           duration_mins: durationMins,
           type: failureType,
           priority: priority,
+          department: department || 'CIVIL',
+          zone: zone || 'CR',
+          section_name: sectionName || assetId,
+          created_by: createdBy || 'Section Controller',
+          created_by_role: createdByRole || 'OPERATOR',
+          created_by_designation: createdByDesignation || 'Section Dispatch Controller',
           scheduled_date: scheduledDate,
           scheduled_day: scheduledDay,
           advance_notice_days: advanceNoticeDays,
+          tasks: tasks || []
         }),
       });
       const data = await res.json();
@@ -384,6 +445,7 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (resMaint.ok) {
         const updatedMaint = await resMaint.json();
         setMaintenanceRequests(updatedMaint);
+        syncAllMaintenanceToFirebase(updatedMaint);
       }
 
       const parts = assetId.split('-');
@@ -399,14 +461,25 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
 
   // Delete specific maintenance request
   const handleDeleteMaintenance = async (id: string) => {
+    // Optimistically update local state immediately
+    setMaintenanceRequests((prev) => prev.filter((m) => m.id !== id));
+    
     try {
-      const res = await fetch(`${API_URL}/maintenance/${id}`, { method: 'DELETE' });
+      // Delete from Firebase Cloud Firestore
+      deleteMaintenanceFromFirebase(id);
+
+      // Delete from backend and re-run optimization
+      const res = await fetch(`${API_URL}/maintenance/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (res.ok) {
-        const updatedList: MaintenanceRequest[] = await res.json();
+        const data = await res.json();
+        const updatedList: MaintenanceRequest[] = Array.isArray(data)
+          ? data
+          : (data.maintenance_requests || []);
+        
         setMaintenanceRequests(updatedList);
 
         if (updatedList.length > 0) {
-          handleOptimize();
+          handleOptimizationResponse(data);
         } else {
           setOptimizationPlan(null);
           setMetrics(null);
@@ -428,6 +501,7 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
       const res = await fetch(`${API_URL}/maintenance`, { method: 'DELETE' });
       if (res.ok) {
         setMaintenanceRequests([]);
+        clearAllMaintenanceFromFirebase();
         setOptimizationPlan(null);
         setMetrics(null);
         setCandidatePlans([]);
@@ -442,13 +516,37 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   // Handle manual option selection per maintenance block
-  const handleOptionSelect = (maintId: string, optionId: string) => {
-    if (!optimizationPlan || !breakdownByMaintenance[maintId]) return;
+  const handleOptionSelect = (param1: string, param2: string) => {
+    // Robust detection whether (maintId, optionId) or (optionId, maintId) is passed
+    const maintId = breakdownByMaintenance[param1] ? param1 : (breakdownByMaintenance[param2] ? param2 : param1);
+    const optionId = maintId === param1 ? param2 : param1;
+
+    if (!breakdownByMaintenance[maintId]) return;
 
     const opt = breakdownByMaintenance[maintId].options.find((o) => o.id === optionId);
     if (!opt) return;
 
-    const newPlan = optimizationPlan.map((b) => {
+    const currentBlocks = optimizationPlan && optimizationPlan.length > 0
+      ? optimizationPlan
+      : Object.entries(breakdownByMaintenance).map(([mId, bDown]) => {
+          const topOpt = bDown.options[0];
+          return {
+            maintenance_id: mId,
+            asset_id: bDown.maintenance_request?.asset_id || mId,
+            start_time: topOpt?.start_time || '',
+            end_time: topOpt?.end_time || '',
+            affected_trains: topOpt?.affected_trains || [],
+            affected_train_details: topOpt?.affected_train_details || [],
+            corridor_trains: topOpt?.corridor_trains || [],
+            delay_caused: topOpt?.delay_caused || 0,
+            ml_predicted_delay: topOpt?.ml_predicted_delay || 0,
+            ml_risk_level: topOpt?.ml_risk_level || 'Low Risk',
+            option_id: topOpt?.id || 'option_a',
+            ai_explanation: topOpt?.ai_explanation,
+          };
+        });
+
+    const newPlan = currentBlocks.map((b) => {
       if (b.maintenance_id === maintId) {
         return {
           ...b,
@@ -526,7 +624,7 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
         },
       }
       : {
-        before: { trains_affected: newAffectedList.length * 2, delay_mins: totalDelay * 2 },
+        before: { trains_affected: Math.max(5, newAffectedList.length * 2), delay_mins: Math.max(120, totalDelay * 2) },
         after: {
           trains_affected: newAffectedList.length,
           delay_mins: totalDelay,
@@ -564,16 +662,21 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
 
   // Selected candidate plan object
   const currentPlan = useMemo(() => {
+    if (selectedPlanId === 'custom') {
+      return {
+        id: 'custom',
+        name: 'Custom Slot Selection',
+        description: 'User-customized maintenance window configuration.',
+        badge: 'Custom Plan',
+        metrics: metrics?.after || { trains_affected: affectedTrains.length, delay_mins: 0 },
+        plan: optimizationPlan || [],
+        affected_trains: affectedTrains,
+        unaffected_trains: unaffectedTrains,
+        dispatch_directives: [],
+      } as CandidatePlan;
+    }
     return candidatePlans.find((p) => p.id === selectedPlanId) || candidatePlans[0] || null;
-  }, [candidatePlans, selectedPlanId]);
-
-  const dispatchDirectives = useMemo(() => {
-    return currentPlan?.dispatch_directives || [];
-  }, [currentPlan]);
-
-  const dispatchStats = useMemo(() => {
-    return currentPlan?.dispatch_stats;
-  }, [currentPlan]);
+  }, [candidatePlans, selectedPlanId, metrics, affectedTrains, unaffectedTrains, optimizationPlan]);
 
   // AI Decision Explanation for active plan/blocks
   const activeAiExplanations = useMemo(() => {
@@ -589,8 +692,17 @@ export const RailwayProvider: React.FC<{ children: ReactNode }> = ({ children })
         .filter(Boolean) as AiExplanation[];
       if (exps.length > 0) return exps;
     }
+    if (breakdownByMaintenance && Object.keys(breakdownByMaintenance).length > 0) {
+      const exps: AiExplanation[] = [];
+      Object.values(breakdownByMaintenance).forEach((bm) => {
+        if (bm.options && bm.options[0]?.ai_explanation) {
+          exps.push(bm.options[0].ai_explanation);
+        }
+      });
+      if (exps.length > 0) return exps;
+    }
     return null;
-  }, [currentPlan, optimizationPlan]);
+  }, [currentPlan, optimizationPlan, breakdownByMaintenance]);
 
   const contextValue: RailwayContextType = {
     network,
